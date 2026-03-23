@@ -12,7 +12,7 @@ except ImportError:
 from tkinter import ttk, filedialog, messagebox, simpledialog
 import threading, urllib.request, urllib.error
 
-VERSION = "1.5.0"
+VERSION = "1.6.0"
 
 def get_app_dir():
     """Папка где лежит .exe или .py — работает в обоих случаях."""
@@ -1134,26 +1134,61 @@ class App(tk.Tk):
     def _make_row(self,idx,task):
         unit=task.get("unit","ft"); total=task.get("total_sum",0.0)
         sa=total*FACTOR_A; sb=total*FACTOR_B
-        rbg="#13161f"; row=tk.Frame(self.ti,bg=rbg,cursor="hand2"); row.pack(fill="x",pady=1)
+        ROW_H=38; rbg="#13161f"
+
+        # Canvas-обёртка для полупрозрачного фона
+        rc=tk.Canvas(self.ti,height=ROW_H,bg=rbg,highlightthickness=0,cursor="hand2")
+        rc.pack(fill="x",pady=1)
+        row=tk.Frame(rc,bg=rbg,cursor="hand2")
+        rc._cf=row; rc._sel=False
+        _wid=rc.create_window(0,0,anchor="nw",window=row)
+
+        def _resize(e,r=rc,wid=_wid):
+            r.itemconfig(wid,width=e.width,height=ROW_H); _draw_bg(r)
+        rc.bind("<Configure>",_resize)
+
+        def _draw_bg(r=rc,blue=False):
+            if not self._bg_image: return
+            try:
+                W=max(1,r.winfo_width()); ry=r.winfo_y()
+                TW=max(1,self._tc.winfo_width()); TH=max(1,self._tc.winfo_height())
+                # Кэш масштабированного фона
+                key=(TW,max(TH,ry+ROW_H+10))
+                if not hasattr(self,"_row_bg_cache") or self._row_bg_cache[0]!=key:
+                    self._row_bg_cache=(key,self._bg_image.resize(key,_PILImage.LANCZOS))
+                bgs=self._row_bg_cache[1]
+                crop=bgs.crop((0,max(0,ry),TW,max(0,ry)+ROW_H)).resize((W,ROW_H),_PILImage.LANCZOS)
+                ov=_PILImage.new("RGB",(W,ROW_H),(30,58,100) if blue else (19,22,31))
+                bl=_PILImage.blend(crop.convert("RGB"),ov,0.55 if blue else 0.62)
+                ph=_ImageTk.PhotoImage(bl); r._bgph=ph
+                r.delete("bg"); r.create_image(0,0,anchor="nw",image=ph,tags="bg"); r.tag_lower("bg")
+                nc="#{:02x}{:02x}{:02x}".format(*bl.getpixel((W//2,ROW_H//2)))
+                r.configure(bg=nc); f=r._cf; f.configure(bg=nc)
+                for w in f.winfo_children():
+                    try:
+                        w.configure(bg=nc)
+                        for cc in w.winfo_children():
+                            try: cc.configure(bg=nc,activebackground=nc,selectcolor=nc)
+                            except: pass
+                    except: pass
+            except: pass
+        rc._bgfn=_draw_bg
+        rc.after(30,_draw_bg)
+
         auto=detect_scale(task.get("grids",[]))
         if "scale" not in task: task["scale"]=auto
-        # Ключ = путь файла (не индекс!) — не съезжает при сортировке
         task_key = task.get("path") or task.get("filename","")
         sv=tk.StringVar(value=task["scale"]); self._svars[task_key]=sv
 
-        def sel(e=None,r=row,i=idx):
-            for w in self.ti.winfo_children():
-                w.configure(bg="#13161f")
-                for cc in w.winfo_children():
-                    try: cc.configure(bg="#13161f")
-                    except: pass
-            r.configure(bg="#1e2644")
-            for cc in r.winfo_children():
-                try: cc.configure(bg="#1e2644")
-                except: pass
-            self._sel_row=i
+        def sel(e=None,r=rc,i=idx):
+            prev=getattr(self,"_sel_rc",None)
+            if prev and prev.winfo_exists() and hasattr(prev,"_bgfn"):
+                prev._sel=False; prev._bgfn(prev)
+            r._sel=True
+            if hasattr(r,"_bgfn"): r._bgfn(r,blue=True)
+            self._sel_rc=r; self._sel_row=i
 
-        row.bind("<Button-1>",sel)
+        rc.bind("<Button-1>",sel); row.bind("<Button-1>",sel)
         def lbl(p,text,fg="#c5cce0",w=0,bold=False,anch="center"):
             l=tk.Label(p,text=text,bg=rbg,fg=fg,
                        font=("Segoe UI",10,"bold" if bold else "normal"),anchor=anch,width=w)
