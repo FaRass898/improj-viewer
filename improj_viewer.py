@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 improj_viewer.py — IMPROJ Viewer v2
 Структура: Профиль (Фарис) → Месяц (Март 2026) → Задачи
@@ -202,14 +201,11 @@ class App(tk.Tk):
                             font=("Segoe UI",8))
         detail_lbl.pack(pady=4)
 
-        # Файлы для скачивания с GitHub
-        base_url=f"https://raw.githubusercontent.com/{GITHUB_USER}/{GITHUB_REPO}/main"
-        files_to_download=[
-            ("improj_viewer.py", "Основной файл программы"),
-            ("Fon.png",          "Фоновое изображение"),
-            ("icon.ico",         "Иконка программы"),
-        ]
-        current_dir=get_app_dir()
+        current_exe = sys.executable
+        current_dir = os.path.dirname(current_exe)
+        new_exe     = os.path.join(current_dir, "improj_viewer_new.exe")
+        base_url    = f"https://raw.githubusercontent.com/{GITHUB_USER}/{GITHUB_REPO}/main"
+        exe_url     = f"{base_url}/improj_viewer.exe"
 
         def _set_status(text, detail="", pct=0):
             self.after(0, lambda: [
@@ -219,50 +215,48 @@ class App(tk.Tk):
             ])
 
         def _download():
-            import shutil
-            errors=[]
-            total=len(files_to_download)
+            try:
+                _set_status("Скачиваем новую версию...", "improj_viewer.exe", 10)
+                req = urllib.request.Request(exe_url, headers={"User-Agent":"improj-viewer"})
+                with urllib.request.urlopen(req, timeout=60) as r:
+                    total_size = int(r.headers.get("Content-Length", 0))
+                    downloaded = 0
+                    with open(new_exe, "wb") as f:
+                        while True:
+                            chunk = r.read(65536)
+                            if not chunk: break
+                            f.write(chunk)
+                            downloaded += len(chunk)
+                            if total_size:
+                                pct = int(downloaded / total_size * 85) + 10
+                                _set_status(
+                                    f"Скачиваем... {downloaded//1024//1024} МБ",
+                                    "improj_viewer.exe", pct)
+                _set_status("Устанавливаем...", "", 96)
+                bat = os.path.join(current_dir, "_update.bat")
+                with open(bat, "w") as f:
+                    f.write(
+                        f"@echo off\n"
+                        f"ping 127.0.0.1 -n 3 >nul\n"
+                        f"move /Y \"{new_exe}\" \"{current_exe}\"\n"
+                        f"start \"\" \"{current_exe}\"\n"
+                        f"del \"%~f0\"\n"
+                    )
+                _set_status("Готово!", "", 100)
+                self.after(200, lambda: _done(True))
+            except Exception as e:
+                self.after(0, lambda err=str(e): _done(False, err))
 
-            for i,(fname,desc) in enumerate(files_to_download):
-                _set_status(f"Скачиваем {fname}...", desc, int(i/total*90))
-                try:
-                    url=f"{base_url}/{fname}"
-                    req=urllib.request.Request(url,
-                        headers={"User-Agent":"improj-viewer"})
-                    with urllib.request.urlopen(req, timeout=30) as r:
-                        data=r.read()
-
-                    dest=os.path.join(current_dir, fname)
-                    # Бэкап для основного файла
-                    if fname=="improj_viewer.py" and os.path.exists(dest):
-                        shutil.copy2(dest, dest+".backup")
-                    with open(dest,"wb") as f:
-                        f.write(data)
-                except urllib.error.HTTPError as e:
-                    if e.code==404:
-                        pass  # Файл не найден — пропускаем (не обязательный)
-                    else:
-                        errors.append(f"{fname}: {e}")
-                except Exception as e:
-                    if fname=="improj_viewer.py":
-                        errors.append(f"{fname}: {e}")  # Главный файл обязателен
-
-            _set_status("Готово!", "", 100)
-            self.after(200, lambda: _done(not errors, errors))
-
-        def _done(ok, errors=[]):
+        def _done(ok, error=""):
             prog.stop(); win.destroy()
             if ok:
-                messagebox.showinfo("Обновление установлено!",
-                    f"Версия {latest_version} установлена.\n\n"
-                    "Закрой программу и открой снова\n"
-                    "чтобы изменения вступили в силу.")
-                if hasattr(self,"_update_btn"):
-                    self._update_btn.destroy()
-                    del self._update_btn
+                import subprocess
+                bat = os.path.join(current_dir, "_update.bat")
+                subprocess.Popen(bat, shell=True,
+                                 creationflags=subprocess.CREATE_NO_WINDOW)
+                self.destroy()
             else:
-                messagebox.showerror("Ошибка",
-                    "Не удалось скачать:\n" + "\n".join(errors))
+                messagebox.showerror("Ошибка", f"Не удалось скачать:\n{error}")
 
         threading.Thread(target=_download, daemon=True).start()
 
