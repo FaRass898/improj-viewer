@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 improj_viewer.py — IMPROJ Viewer v2
 Структура: Профиль (Фарис) → Месяц (Март 2026) → Задачи
@@ -12,7 +13,7 @@ except ImportError:
 from tkinter import ttk, filedialog, messagebox, simpledialog
 import threading, urllib.request, urllib.error
 
-VERSION = "1.0.0"
+VERSION = "1.4.0"
 
 def get_app_dir():
     """Папка где лежит .exe или .py — работает в обоих случаях."""
