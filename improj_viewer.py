@@ -133,6 +133,8 @@ class App(tk.Tk):
         except: pass
         self._bg_image = None
         self._bg_photo = None
+        self._bg_orig  = None   # оригинал без прозрачности
+        self._bg_alpha = self._load_bg_settings()
         self._load_bg_image()
         # Проверяем обновления в фоне при запуске
         threading.Thread(target=self._check_update_bg, daemon=True).start()
@@ -249,22 +251,134 @@ class App(tk.Tk):
 
         threading.Thread(target=_download, daemon=True).start()
 
-    def _load_bg_image(self):
-        """Загружает фоновое изображение Fon.png рядом с программой."""
+    def _load_bg_settings(self):
+        """Загружает сохранённые настройки фона."""
+        try:
+            f = os.path.join(os.path.expanduser("~"), "improj_bg.json")
+            if os.path.exists(f):
+                d = json.load(open(f, encoding="utf-8"))
+                return d
+        except: pass
+        return {"path": os.path.join(get_app_dir(), "Fon.png"), "alpha": 0.18}
+
+    def _save_bg_settings(self):
+        f = os.path.join(os.path.expanduser("~"), "improj_bg.json")
+        json.dump(self._bg_alpha, open(f,"w",encoding="utf-8"), ensure_ascii=False)
+
+    def _load_bg_image(self, path=None):
+        """Загружает фоновое изображение."""
         if not _PIL_OK: return
         try:
-            folder = get_app_dir()
-            fon_path = os.path.join(folder, "Fon.png")
-            if not os.path.exists(fon_path): return
-            img = _PILImage.open(fon_path).convert("RGBA")
-            # Делаем полупрозрачным — 25% видимости
+            if path is None:
+                path = self._bg_alpha.get("path","")
+            if not path or not os.path.exists(path): return
+            img = _PILImage.open(path).convert("RGBA")
+            self._bg_orig = img  # сохраняем оригинал
+            self._bg_alpha["path"] = path
+            self._apply_bg_alpha()
+        except Exception as e:
+            print("Фон не загружен:", e)
+
+    def _apply_bg_alpha(self):
+        """Применяет прозрачность к фону."""
+        if not self._bg_orig: return
+        try:
+            alpha_val = self._bg_alpha.get("alpha", 0.18)
+            img = self._bg_orig.copy()
             r,g,b,a = img.split()
-            a = a.point(lambda x: int(x * 0.18))
+            a = a.point(lambda x: int(x * alpha_val))
             img.putalpha(a)
             self._bg_image = img
             self._draw_bg()
         except Exception as e:
-            print("Фон не загружен:", e)
+            print("Ошибка прозрачности:", e)
+
+    def _choose_bg(self):
+        """Диалог выбора и настройки фона."""
+        win = tk.Toplevel(self)
+        win.title("Настройка фона")
+        win.geometry("420x280")
+        win.configure(bg="#0f1117")
+        win.resizable(False, False)
+
+        tk.Label(win, text="🖼  Фоновое изображение",
+                 bg="#0f1117", fg="#e2e6f0",
+                 font=("Segoe UI",11,"bold")).pack(pady=(16,4))
+        tk.Label(win, text="Любая картинка — будет показана полупрозрачной",
+                 bg="#0f1117", fg="#4a5578",
+                 font=("Segoe UI",8)).pack(pady=(0,12))
+
+        # Текущий файл
+        path_var = tk.StringVar(value=self._bg_alpha.get("path",""))
+        pf = tk.Frame(win, bg="#0f1117"); pf.pack(fill="x", padx=20)
+        tk.Label(pf,text="Файл:",bg="#0f1117",fg="#6b7599",
+                 font=("Segoe UI",9)).pack(side="left",padx=(0,6))
+        tk.Entry(pf, textvariable=path_var,
+                 bg="#1e2233",fg="#c5cce0",insertbackground="#c5cce0",
+                 relief="flat",font=("Segoe UI",8),
+                 width=36).pack(side="left",ipady=5)
+
+        def browse():
+            p = filedialog.askopenfilename(
+                title="Выбери изображение",
+                filetypes=[("Изображения","*.png *.jpg *.jpeg *.bmp *.gif"),
+                           ("All","*.*")])
+            if p: path_var.set(p)
+
+        self._btn(pf,"📁",browse,fg="#8b93a8",bg="#1e2233",
+                  padx=8,pady=4).pack(side="left",padx=(4,0))
+
+        # Прозрачность
+        alpha_frame = tk.Frame(win, bg="#0f1117")
+        alpha_frame.pack(fill="x", padx=20, pady=(16,0))
+        tk.Label(alpha_frame,text="Прозрачность:",bg="#0f1117",fg="#6b7599",
+                 font=("Segoe UI",9)).pack(side="left",padx=(0,8))
+        alpha_var = tk.DoubleVar(value=self._bg_alpha.get("alpha",0.18)*100)
+        alpha_lbl = tk.Label(alpha_frame, text=f"{int(alpha_var.get())}%",
+                            bg="#0f1117",fg="#5b8ef0",
+                            font=("Segoe UI",10,"bold"),width=4)
+        alpha_lbl.pack(side="right")
+
+        def on_alpha(v):
+            alpha_lbl.configure(text=f"{int(float(v))}%")
+            # Живой предпросмотр
+            self._bg_alpha["alpha"] = float(v)/100
+            if path_var.get() and os.path.exists(path_var.get()):
+                self._load_bg_image(path_var.get())
+
+        sl = tk.Scale(alpha_frame, from_=1, to=50,
+                     variable=alpha_var, orient="horizontal",
+                     length=220, showvalue=0,
+                     bg="#0f1117",fg="#c5cce0",
+                     troughcolor="#1e2233",highlightthickness=0,
+                     command=on_alpha)
+        sl.pack(side="left", fill="x", expand=True)
+
+        # Кнопки
+        def apply():
+            p = path_var.get().strip()
+            a = alpha_var.get()/100
+            self._bg_alpha = {"path": p, "alpha": a}
+            self._load_bg_image(p)
+            self._save_bg_settings()
+            win.destroy()
+
+        def remove_bg():
+            self._bg_image = None
+            self._bg_orig = None
+            self._bg_alpha = {"path":"","alpha":0.18}
+            if hasattr(self,"_bg_label"):
+                self._bg_label.configure(image="")
+            self._save_bg_settings()
+            win.destroy()
+
+        br = tk.Frame(win, bg="#0f1117"); br.pack(pady=(20,0))
+        self._btn(br,"✓ Применить",apply,fg="#4dc87a",bg="#1a2a1a",
+                  padx=14,pady=8,font=("Segoe UI",10,"bold")).pack(side="left",padx=(0,8))
+        self._btn(br,"🗑 Убрать фон",remove_bg,fg="#e05555",bg="#2a1515",
+                  padx=12,pady=8).pack(side="left",padx=(0,8))
+        self._btn(br,"Отмена",win.destroy,fg="#6b7599",bg="#1e2233",
+                  padx=12,pady=8).pack(side="left")
 
     def _draw_bg(self):
         """Рисует фон на главном окне через canvas."""
@@ -349,6 +463,8 @@ class App(tk.Tk):
                     font=("Segoe UI",9),cursor="hand2"); self.btn_an.pack(side="left",padx=(2,0))
         self._btn(hdr,"🔄",self._refresh_all,fg="#4dc87a",bg="#0d0f18",padx=10,pady=6
                   ).pack(side="right",padx=8,pady=8)
+        self._btn(hdr,"🖼 Фон",self._choose_bg,fg="#4a5580",bg="#0d0f18",padx=10,pady=6
+                  ).pack(side="right",pady=8)
         self._btn(hdr,"📂 Общая папка",self._shared_folder,fg="#4a5580",bg="#0d0f18",padx=10,pady=6
                   ).pack(side="right",pady=8)
         self.path_lbl=tk.Label(hdr,text="",bg="#0d0f18",fg="#252d45",font=("Segoe UI",8))
