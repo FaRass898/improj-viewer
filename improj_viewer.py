@@ -13,6 +13,20 @@ from tkinter import ttk, filedialog, messagebox, simpledialog
 import threading, urllib.request, urllib.error
 
 VERSION = "1.0.0"
+
+def get_app_dir():
+    """Папка где лежит .exe или .py — работает в обоих случаях."""
+    import sys
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
+
+def get_app_file():
+    """Путь к самому файлу .exe или .py."""
+    import sys
+    if getattr(sys, "frozen", False):
+        return sys.executable
+    return os.path.abspath(__file__)
 # Замени на свой GitHub репозиторий после загрузки:
 GITHUB_USER = "FaRass898"
 GITHUB_REPO = "improj-viewer"
@@ -463,8 +477,6 @@ class App(tk.Tk):
                     font=("Segoe UI",9),cursor="hand2"); self.btn_an.pack(side="left",padx=(2,0))
         self._btn(hdr,"🔄",self._refresh_all,fg="#4dc87a",bg="#0d0f18",padx=10,pady=6
                   ).pack(side="right",padx=8,pady=8)
-        self._btn(hdr,"🖼 Фон",self._choose_bg,fg="#4a5580",bg="#0d0f18",padx=10,pady=6
-                  ).pack(side="right",pady=8)
         self._btn(hdr,"📂 Общая папка",self._shared_folder,fg="#4a5580",bg="#0d0f18",padx=10,pady=6
                   ).pack(side="right",pady=8)
         self.path_lbl=tk.Label(hdr,text="",bg="#0d0f18",fg="#252d45",font=("Segoe UI",8))
@@ -477,6 +489,9 @@ class App(tk.Tk):
                   ).pack(side="left",pady=6)
         self._btn(self.pbar,"✕",self._del_profile,fg="#e05555",bg="#2a1515",padx=8,pady=5
                   ).pack(side="left",padx=4,pady=6)
+        tk.Frame(self.pbar,bg="#252d45",width=1).pack(side="left",fill="y",padx=8,pady=4)
+        self._btn(self.pbar,"🖼 Фон",self._choose_bg,fg="#8b93a8",bg="#1a1e2e",padx=10,pady=5
+                  ).pack(side="left",pady=6)
 
         # Content
         self.cf=tk.Frame(self,bg="#0f1117"); self.cf.pack(fill="both",expand=True)
