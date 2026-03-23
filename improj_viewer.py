@@ -128,7 +128,7 @@ class App(tk.Tk):
         self._refresh_profiles(); self._auto_refresh()
         self.bind("<Configure>", lambda e: self._on_resize(e))
         try:
-            ico=os.path.join(os.path.dirname(os.path.abspath(__file__)),"icon.ico")
+            ico=os.path.join(get_app_dir(),"icon.ico")
             if os.path.exists(ico): self.iconbitmap(ico)
         except: pass
         self._bg_image = None
@@ -165,58 +165,87 @@ class App(tk.Tk):
         self._update_btn.pack(side="right", padx=12, pady=6)
 
     def _do_update(self, latest_version):
-        """Скачивает и устанавливает новую версию."""
+        """Скачивает и устанавливает новую версию + доп. файлы."""
         if not messagebox.askyesno("Обновление",
             f"Доступна версия {latest_version}\n"
-            f"Текущая версия: {VERSION}\n\n"
-            "Скачать и установить обновление?\n"
-            "(программа перезапустится автоматически)"):
+            f"Текущая: {VERSION}\n\n"
+            "Скачать и установить?"):
             return
 
         win=tk.Toplevel(self); win.title("Обновление")
-        win.geometry("360x120"); win.configure(bg="#0f1117")
+        win.geometry("400x160"); win.configure(bg="#0f1117")
         win.resizable(False,False); win.grab_set()
-        tk.Label(win,text="Скачиваем обновление...",
+        status_lbl=tk.Label(win,text="Подготовка...",
                  bg="#0f1117",fg="#e2e6f0",
-                 font=("Segoe UI",11,"bold")).pack(pady=(24,8))
-        prog=ttk.Progressbar(win,mode="indeterminate",length=300)
-        prog.pack(padx=30); prog.start(10)
+                 font=("Segoe UI",10,"bold"))
+        status_lbl.pack(pady=(20,8))
+        prog=ttk.Progressbar(win,mode="determinate",length=340,maximum=100)
+        prog.pack(padx=30)
+        detail_lbl=tk.Label(win,text="",bg="#0f1117",fg="#4a5578",
+                            font=("Segoe UI",8))
+        detail_lbl.pack(pady=4)
+
+        # Файлы для скачивания с GitHub
+        base_url=f"https://raw.githubusercontent.com/{GITHUB_USER}/{GITHUB_REPO}/main"
+        files_to_download=[
+            ("improj_viewer.py", "Основной файл программы"),
+            ("Fon.png",          "Фоновое изображение"),
+            ("icon.ico",         "Иконка программы"),
+        ]
+        current_dir=get_app_dir()
+
+        def _set_status(text, detail="", pct=0):
+            self.after(0, lambda: [
+                status_lbl.configure(text=text),
+                detail_lbl.configure(text=detail),
+                prog.configure(value=pct)
+            ])
 
         def _download():
-            try:
-                req=urllib.request.Request(UPDATE_URL,
-                    headers={"User-Agent":"improj-viewer"})
-                with urllib.request.urlopen(req, timeout=30) as r:
-                    new_code=r.read()
+            import shutil
+            errors=[]
+            total=len(files_to_download)
 
-                # Сохраняем рядом с текущим файлом
-                current=os.path.abspath(__file__)
-                # Бэкап старой версии
-                backup=current+".backup"
-                if os.path.exists(current):
-                    import shutil; shutil.copy2(current, backup)
-                # Записываем новую версию
-                with open(current,"wb") as f:
-                    f.write(new_code)
+            for i,(fname,desc) in enumerate(files_to_download):
+                _set_status(f"Скачиваем {fname}...", desc, int(i/total*90))
+                try:
+                    url=f"{base_url}/{fname}"
+                    req=urllib.request.Request(url,
+                        headers={"User-Agent":"improj-viewer"})
+                    with urllib.request.urlopen(req, timeout=30) as r:
+                        data=r.read()
 
-                self.after(0, lambda: _done(True))
-            except Exception as e:
-                self.after(0, lambda err=str(e): _done(False, err))
+                    dest=os.path.join(current_dir, fname)
+                    # Бэкап для основного файла
+                    if fname=="improj_viewer.py" and os.path.exists(dest):
+                        shutil.copy2(dest, dest+".backup")
+                    with open(dest,"wb") as f:
+                        f.write(data)
+                except urllib.error.HTTPError as e:
+                    if e.code==404:
+                        pass  # Файл не найден — пропускаем (не обязательный)
+                    else:
+                        errors.append(f"{fname}: {e}")
+                except Exception as e:
+                    if fname=="improj_viewer.py":
+                        errors.append(f"{fname}: {e}")  # Главный файл обязателен
 
-        def _done(ok, err=""):
+            _set_status("Готово!", "", 100)
+            self.after(200, lambda: _done(not errors, errors))
+
+        def _done(ok, errors=[]):
             prog.stop(); win.destroy()
             if ok:
-                messagebox.showinfo("Готово",
-                    "Обновление установлено!\n"
-                    "Закрой и снова открой программу.")
-                # Удаляем кнопку обновления
+                messagebox.showinfo("Обновление установлено!",
+                    f"Версия {latest_version} установлена.\n\n"
+                    "Закрой программу и открой снова\n"
+                    "чтобы изменения вступили в силу.")
                 if hasattr(self,"_update_btn"):
                     self._update_btn.destroy()
                     del self._update_btn
             else:
                 messagebox.showerror("Ошибка",
-                    f"Не удалось скачать обновление:\n{err}\n\n"
-                    "Скачай файл вручную с GitHub.")
+                    "Не удалось скачать:\n" + "\n".join(errors))
 
         threading.Thread(target=_download, daemon=True).start()
 
@@ -224,7 +253,7 @@ class App(tk.Tk):
         """Загружает фоновое изображение Fon.png рядом с программой."""
         if not _PIL_OK: return
         try:
-            folder = os.path.dirname(os.path.abspath(__file__))
+            folder = get_app_dir()
             fon_path = os.path.join(folder, "Fon.png")
             if not os.path.exists(fon_path): return
             img = _PILImage.open(fon_path).convert("RGBA")
