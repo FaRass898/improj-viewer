@@ -12,7 +12,7 @@ except ImportError:
 from tkinter import ttk, filedialog, messagebox, simpledialog
 import threading, urllib.request, urllib.error
 
-VERSION = "1.4.0"
+VERSION = "1.0.0"
 
 def get_app_dir():
     """Папка где лежит .exe или .py — работает в обоих случаях."""
@@ -515,9 +515,9 @@ class App(tk.Tk):
         c=tk.Canvas(wrap,bg="#0f1117",highlightthickness=0)
         sb=ttk.Scrollbar(wrap,orient="vertical",command=c.yview)
         c.configure(yscrollcommand=sb.set); sb.pack(side="right",fill="y"); c.pack(side="left",fill="both",expand=True)
-        self.ti=tk.Frame(c,bg="#0f1117"); cw=c.create_window(0,0,anchor="nw",window=self.ti)
+        self.ti=tk.Frame(c,bg="#0f1117"); self._ti_cw=c.create_window(0,0,anchor="nw",window=self.ti)
         self.ti.bind("<Configure>",lambda e:c.configure(scrollregion=c.bbox("all")))
-        c.bind("<Configure>",lambda e:c.itemconfig(cw,width=e.width))
+        c.bind("<Configure>",lambda e:(c.itemconfig(self._ti_cw,width=e.width),self._refresh_empty_bg()))
         c.bind("<MouseWheel>",lambda e:c.yview_scroll(-1*(e.delta//120),"units"))
         self._tc=c
         # Bottom bar
@@ -1081,6 +1081,7 @@ class App(tk.Tk):
         for btn,val,upd in getattr(self,"_sort_btns",[]):
             upd()
         for w in self.ti.winfo_children(): w.destroy()
+        self._tc.delete("empty_overlay"); self._empty_text = ""
         self._svars={}; tasks=self._cur_tasks()
         if not self._cur_profile:
             self._empty("← Создай или выбери профиль"); self._upd_tot([]); return
@@ -1111,9 +1112,24 @@ class App(tk.Tk):
         for i,task in enumerate(tasks): self._make_row(i,task)
         self._upd_tot(tasks)
 
-    def _empty(self,text):
-        tk.Label(self.ti,text=text,bg="#0f1117",fg="#3d4a6a",
-                 font=("Segoe UI",13)).pack(pady=60)
+    def _empty(self, text):
+        self._empty_text = text
+        self._tc.delete("empty_overlay")
+        cw = max(1, self._tc.winfo_width())
+        ch = max(1, self._tc.winfo_height())
+        if self._bg_image:
+            try:
+                bg = self._bg_image.resize((cw, ch), _PILImage.LANCZOS)
+                self._empty_photo = _ImageTk.PhotoImage(bg)
+                self._tc.create_image(0, 0, anchor="nw", image=self._empty_photo, tags="empty_overlay")
+            except: pass
+        self._tc.create_text(cw // 2, ch // 2, text=text, fill="#3d4a6a",
+                              font=("Segoe UI", 13), tags="empty_overlay")
+
+    def _refresh_empty_bg(self):
+        if not hasattr(self, "_empty_text") or not self._empty_text: return
+        if self.ti.winfo_children(): return
+        self._empty(self._empty_text)
 
     def _make_row(self,idx,task):
         unit=task.get("unit","ft"); total=task.get("total_sum",0.0)
