@@ -4,6 +4,11 @@ improj_viewer.py — IMPROJ Viewer v2
 """
 
 import json, os, datetime, math, tkinter as tk
+try:
+    from PIL import Image as _PILImage, ImageTk as _ImageTk
+    _PIL_OK = True
+except ImportError:
+    _PIL_OK = False
 from tkinter import ttk, filedialog, messagebox, simpledialog
 import threading, urllib.request, urllib.error
 
@@ -115,12 +120,20 @@ class App(tk.Tk):
         self._cur_profile=None; self._cur_month=None
         self._sel_row=None; self._svars={}
         self._view="tasks"; self._anim_prog=0.0; self._anim_job=None
+        self._profile_colors=self._load_profile_colors()
+        self._search_var=tk.StringVar()
+        self._sort_var=tk.StringVar(value="дата")
+        self._sort_rev=tk.BooleanVar(value=False)
         self._setup_style(); self._build_ui()
         self._refresh_profiles(); self._auto_refresh()
+        self.bind("<Configure>", lambda e: self._on_resize(e))
         try:
             ico=os.path.join(os.path.dirname(os.path.abspath(__file__)),"icon.ico")
             if os.path.exists(ico): self.iconbitmap(ico)
         except: pass
+        self._bg_image = None
+        self._bg_photo = None
+        self._load_bg_image()
         # Проверяем обновления в фоне при запуске
         threading.Thread(target=self._check_update_bg, daemon=True).start()
 
@@ -207,6 +220,76 @@ class App(tk.Tk):
 
         threading.Thread(target=_download, daemon=True).start()
 
+    def _load_bg_image(self):
+        """Загружает фоновое изображение Fon.png рядом с программой."""
+        if not _PIL_OK: return
+        try:
+            folder = os.path.dirname(os.path.abspath(__file__))
+            fon_path = os.path.join(folder, "Fon.png")
+            if not os.path.exists(fon_path): return
+            img = _PILImage.open(fon_path).convert("RGBA")
+            # Делаем полупрозрачным — 25% видимости
+            r,g,b,a = img.split()
+            a = a.point(lambda x: int(x * 0.18))
+            img.putalpha(a)
+            self._bg_image = img
+            self._draw_bg()
+        except Exception as e:
+            print("Фон не загружен:", e)
+
+    def _draw_bg(self):
+        """Рисует фон на главном окне через canvas."""
+        if not self._bg_image: return
+        try:
+            W = self.winfo_width() or 1100
+            H = self.winfo_height() or 700
+            # Масштабируем фон под размер окна
+            bg = self._bg_image.resize((W, H), _PILImage.LANCZOS)
+            self._bg_photo = _ImageTk.PhotoImage(bg)
+            # Помещаем как метку позади всего
+            if not hasattr(self, '_bg_label'):
+                self._bg_label = tk.Label(self, image=self._bg_photo, bd=0)
+                self._bg_label.place(x=0, y=0, relwidth=1, relheight=1)
+                self._bg_label.lower()  # отправляем на задний план
+            else:
+                self._bg_label.configure(image=self._bg_photo)
+        except Exception as e:
+            print("Ошибка фона:", e)
+
+    def _load_profile_colors(self):
+        """Загружает сохранённые цвета профилей."""
+        try:
+            f = os.path.join(os.path.expanduser("~"), "improj_colors.json")
+            if os.path.exists(f):
+                return json.load(open(f, encoding="utf-8"))
+        except: pass
+        return {}
+
+    def _save_profile_colors(self):
+        f = os.path.join(os.path.expanduser("~"), "improj_colors.json")
+        json.dump(self._profile_colors, open(f,"w",encoding="utf-8"),
+                  ensure_ascii=False, indent=2)
+
+    def _get_profile_color(self, name):
+        """Возвращает цвет профиля — сохранённый или авто."""
+        if name in self._profile_colors:
+            return self._profile_colors[name]
+        idx = sorted(self._profiles.keys()).index(name) if name in self._profiles else 0
+        return COLORS[idx % len(COLORS)]
+
+    def _pick_profile_color(self, name):
+        """Открывает диалог выбора цвета для профиля."""
+        from tkinter import colorchooser
+        current = self._get_profile_color(name)
+        color = colorchooser.askcolor(color=current,
+            title=f"Цвет профиля «{name}»")
+        if color and color[1]:
+            self._profile_colors[name] = color[1]
+            self._save_profile_colors()
+            self._refresh_profiles()
+            if self._view == "analytics":
+                self._start_anim()
+
     def _setup_style(self):
         s=ttk.Style()
         try: s.theme_use("clam")
@@ -290,6 +373,53 @@ class App(tk.Tk):
                   font=("Segoe UI",9,"bold")).pack(side="left",padx=(0,8),pady=8)
         self._btn(bot,"🗑 Удалить",self._del_task,fg="#e05555",bg="#2a1515",padx=10,pady=8
                   ).pack(side="left",pady=8)
+        # ── Поиск ─────────────────────────────────────────────────────────────
+        tk.Frame(bot,bg="#252d45",width=1).pack(side="left",fill="y",padx=10,pady=6)
+        search_wrap=tk.Frame(bot,bg="#0d0f18",bd=1,relief="flat")
+        search_wrap.pack(side="left",pady=8)
+        tk.Label(search_wrap,text=" 🔍",bg="#0d0f18",fg="#5b8ef0",
+                 font=("Segoe UI",9)).pack(side="left")
+        search_entry=tk.Entry(search_wrap,textvariable=self._search_var,
+                              bg="#0d0f18",fg="#e2e6f0",insertbackground="#5b8ef0",
+                              relief="flat",font=("Segoe UI",9),width=15,bd=0)
+        search_entry.pack(side="left",ipady=5,padx=(0,4))
+        self._search_var.trace_add("write",lambda *a:self._refresh_tasks())
+        tk.Button(search_wrap,text="×",command=lambda:self._search_var.set(""),
+                  bg="#0d0f18",fg="#4a5578",bd=0,relief="flat",
+                  font=("Segoe UI",11),cursor="hand2",
+                  activebackground="#0d0f18",activeforeground="#e05555"
+                  ).pack(side="left",padx=(0,4))
+        # ── Сортировка ────────────────────────────────────────────────────────
+        tk.Frame(bot,bg="#252d45",width=1).pack(side="left",fill="y",padx=10,pady=6)
+        sort_wrap=tk.Frame(bot,bg="#13151e"); sort_wrap.pack(side="left",pady=8)
+        tk.Label(sort_wrap,text="Сортировка:",bg="#13151e",fg="#4a5578",
+                 font=("Segoe UI",8)).pack(side="left",padx=(0,6))
+        # Кнопки сортировки вместо комбобокса
+        for lbl,val,icon in [("Дата","дата","📅"),("Имя","имя","🔤"),
+                               ("Длина","длина","📏"),("Сумма","сумма","💰")]:
+            def make_sort_btn(v=val):
+                def cmd():
+                    if self._sort_var.get()==v:
+                        self._sort_rev.set(not self._sort_rev.get())
+                    else:
+                        self._sort_var.set(v)
+                        self._sort_rev.set(False)
+                    self._refresh_tasks()
+                return cmd
+            sb=tk.Button(sort_wrap,text=f"{icon} {lbl}",
+                         command=make_sort_btn(),
+                         bg="#1e2233",fg="#6b7599",
+                         activebackground="#252d45",activeforeground="#5b8ef0",
+                         bd=0,relief="flat",padx=8,pady=4,
+                         font=("Segoe UI",8),cursor="hand2")
+            sb.pack(side="left",padx=2)
+            # Подсветить активный
+            def _upd_btn(b=sb,v=val):
+                active=self._sort_var.get()==v
+                arr="↑" if (active and not self._sort_rev.get()) else "↓" if (active and self._sort_rev.get()) else ""
+                b.configure(bg="#1c2a4a" if active else "#1e2233",
+                            fg="#5b8ef0" if active else "#6b7599")
+            self._sort_btns=getattr(self,"_sort_btns",[])+[(sb,val,_upd_btn)]
         stats=tk.Frame(bot,bg="#13151e"); stats.pack(side="right",padx=16,pady=4)
         r1=tk.Frame(stats,bg="#13151e"); r1.pack(anchor="e")
         tk.Label(r1,text="Итого:",bg="#13151e",fg="#6b7599",font=("Segoe UI",9)).pack(side="left",padx=(0,6))
@@ -465,7 +595,7 @@ class App(tk.Tk):
 
         # Кривые для каждого профиля
         for pi,pname in enumerate(draw_profiles):
-            color=COLORS[pi%len(COLORS)]
+            color=self._get_profile_color(pname)
             pts=[]
             for j,day in enumerate(days):
                 val=day_data[day].get(pname,0)
@@ -589,7 +719,7 @@ class App(tk.Tk):
         for i,name in enumerate(names):
             xc=pl+(i+0.5)*cw//len(names); val=totals.get(name,0)
             bh=int(ch*(val/mx)*prog); x1=xc-bw//2; x2=xc+bw//2; y1=pt+ch-bh; y2=pt+ch
-            color=COLORS[i%len(COLORS)]
+            color=self._get_profile_color(name)
             c.create_rectangle(x1+3,y1+3,x2+3,y2,fill="#0a0c14",outline="")
             c.create_rectangle(x1,y1,x2,y2,fill=color,outline="")
             if bh>20: c.create_text(xc,y1-4,text=f"{val:,.0f}",fill=color,font=("Segoe UI",7,"bold"),anchor="s")
@@ -625,7 +755,7 @@ class App(tk.Tk):
             c.create_text(pl-4,y,text=f"{mx*(4-i)/4:,.0f}",fill="#4a5580",font=("Segoe UI",7),anchor="e")
         prog=self._ease(self._anim_prog)
         for pi,name in enumerate(names):
-            md=self._monthly_data_metric(name); color=COLORS[pi%len(COLORS)]; pts=[]
+            md=self._monthly_data_metric(name); color=self._get_profile_color(name); pts=[]
             for j,m in enumerate(months):
                 val=md.get(m,0)
                 x=pl+j*cw//(nm-1) if nm>1 else pl+cw//2
@@ -641,7 +771,7 @@ class App(tk.Tk):
         # Legend
         lx=pl
         for pi,name in enumerate(names):
-            color=COLORS[pi%len(COLORS)]
+            color=self._get_profile_color(name)
             c.create_rectangle(lx,H-14,lx+12,H-4,fill=color,outline="")
             c.create_text(lx+16,H-9,text=name,fill="#8b93a8",font=("Segoe UI",8),anchor="w")
             lx+=len(name)*7+28
@@ -649,13 +779,22 @@ class App(tk.Tk):
     def _refresh_profiles(self):
         for w in self.ptabs.winfo_children(): w.destroy()
         for i,name in enumerate(sorted(self._profiles.keys())):
-            active=(name==self._cur_profile); color=COLORS[i%len(COLORS)]
-            tk.Button(self.ptabs,text=name,command=lambda n=name:self._sel_profile(n),
+            active=(name==self._cur_profile)
+            color=self._get_profile_color(name)
+            grp=tk.Frame(self.ptabs,bg="#0d0f18"); grp.pack(side="left",padx=(0,3),pady=6)
+            tk.Button(grp,text=name,command=lambda n=name:self._sel_profile(n),
                       bg="#1e2233" if active else "#13151e",fg=color if active else "#6b7599",
                       activebackground="#1e2233",activeforeground=color,
                       bd=0,relief="flat",padx=12,pady=5,cursor="hand2",
                       font=("Segoe UI",9,"bold" if active else "normal")
-                      ).pack(side="left",padx=(0,2),pady=6)
+                      ).pack(side="left")
+            # Цветная точка — кликни чтобы изменить цвет
+            dot=tk.Button(grp,text="●",command=lambda n=name:self._pick_profile_color(n),
+                      bg="#0d0f18",fg=color,
+                      activebackground="#1e2233",activeforeground=color,
+                      bd=0,relief="flat",padx=2,pady=5,cursor="hand2",
+                      font=("Segoe UI",10))
+            dot.pack(side="left")
 
     def _new_profile(self):
         n=simpledialog.askstring("Новый профиль","Имя (Фарис, Алишер...):")
@@ -783,6 +922,9 @@ class App(tk.Tk):
         self._sel_row=None; self._refresh_months(); self._refresh_tasks()
 
     def _refresh_tasks(self):
+        # Обновляем подсветку кнопок сортировки
+        for btn,val,upd in getattr(self,"_sort_btns",[]):
+            upd()
         for w in self.ti.winfo_children(): w.destroy()
         self._svars={}; tasks=self._cur_tasks()
         if not self._cur_profile:
@@ -791,6 +933,26 @@ class App(tk.Tk):
             self._empty("← Выбери месяц"); self._upd_tot([]); return
         if not tasks:
             self._empty("Нет задач — нажми «＋ Файл»"); self._upd_tot([]); return
+        # Фильтрация по поиску
+        q = self._search_var.get().lower().strip() if hasattr(self,"_search_var") else ""
+        if q:
+            tasks = [t for t in tasks if
+                     q in t.get("filename","").lower() or
+                     q in t.get("well","").lower() or
+                     q in t.get("api","").lower()]
+
+        # Сортировка
+        sort = self._sort_var.get() if hasattr(self,"_sort_var") else "дата"
+        rev  = self._sort_rev.get() if hasattr(self,"_sort_rev") else False
+        key_fn = {
+            "дата":  lambda t: t.get("added",""),
+            "имя":   lambda t: t.get("filename","").lower(),
+            "длина": lambda t: t.get("total_sum",0),
+            "сумма": lambda t: t.get("total_sum",0) * (
+                FACTOR_A if t.get("scale","A")=="A" else FACTOR_B),
+        }.get(sort, lambda t: t.get("added",""))
+        tasks = sorted(tasks, key=key_fn, reverse=rev)
+
         for i,task in enumerate(tasks): self._make_row(i,task)
         self._upd_tot(tasks)
 
@@ -804,7 +966,9 @@ class App(tk.Tk):
         rbg="#13161f"; row=tk.Frame(self.ti,bg=rbg,cursor="hand2"); row.pack(fill="x",pady=1)
         auto=detect_scale(task.get("grids",[]))
         if "scale" not in task: task["scale"]=auto
-        sv=tk.StringVar(value=task["scale"]); self._svars[idx]=sv
+        # Ключ = путь файла (не индекс!) — не съезжает при сортировке
+        task_key = task.get("path") or task.get("filename","")
+        sv=tk.StringVar(value=task["scale"]); self._svars[task_key]=sv
 
         def sel(e=None,r=row,i=idx):
             for w in self.ti.winfo_children():
@@ -867,9 +1031,10 @@ class App(tk.Tk):
 
     def _recalc(self):
         tasks=self._cur_tasks(); ts=tf=0.0; unit="ft"
-        for i,t in enumerate(tasks):
+        for t in tasks:
             val=t.get("total_sum",0.0); tf+=val; unit=t.get("unit","ft")
-            sv=self._svars.get(i)
+            task_key=t.get("path") or t.get("filename","")
+            sv=self._svars.get(task_key)
             ts+=val*(FACTOR_A if (not sv or sv.get()=="A") else FACTOR_B)
         if ts>0:
             self.tot_lbl.configure(text=f"{ts:,.0f} сом")
@@ -927,6 +1092,10 @@ class App(tk.Tk):
         self._profiles=load_profiles(); self._refresh_profiles()
         self._refresh_months(); self._refresh_tasks()
         if self._view=="analytics": self._start_anim()
+
+    def _on_resize(self, event):
+        if event.widget == self and self._bg_image:
+            self.after(100, self._draw_bg)
 
     def _auto_refresh(self):
         try:
