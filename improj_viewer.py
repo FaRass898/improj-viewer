@@ -12,7 +12,7 @@ except ImportError:
 from tkinter import ttk, filedialog, messagebox, simpledialog
 import threading, urllib.request, urllib.error
 
-VERSION = "1.6.0"
+VERSION = "1.7.0"
 
 def get_app_dir():
     """Папка где лежит .exe или .py — работает в обоих случаях."""
@@ -132,8 +132,9 @@ class App(tk.Tk):
         self.resizable(True,True)
         self._profiles=load_profiles()
         self._cur_profile=None; self._cur_month=None
-        self._sel_row=None; self._svars={}
+        self._sel_row=None; self._svars={}; self._checked_rows=set()
         self._view="tasks"; self._anim_prog=0.0; self._anim_job=None
+        self._month_order={}  # {profile: [m1,m2,...]} custom order
         self._profile_colors=self._load_profile_colors()
         self._search_var=tk.StringVar()
         self._sort_var=tk.StringVar(value="дата")
@@ -627,6 +628,15 @@ class App(tk.Tk):
         dh=tk.Frame(day_frame,bg="#13161f"); dh.pack(fill="x",padx=12,pady=(10,6))
         self.day_title=tk.Label(dh,text="По дням",bg="#13161f",fg="#8b93a8",
                  font=("Segoe UI",9,"bold")); self.day_title.pack(side="left")
+        # Фильтр по месяцу (для всех графиков)
+        tk.Label(dh,text="Месяц:",bg="#13161f",fg="#4a5580",
+                 font=("Segoe UI",8)).pack(side="right",padx=(0,4))
+        self.analytics_month_var=tk.StringVar(value="Все")
+        self.analytics_month_cb=ttk.Combobox(dh,textvariable=self.analytics_month_var,
+                                              state="readonly",width=14,
+                                              font=("Segoe UI",9))
+        self.analytics_month_cb.pack(side="right",padx=(0,12))
+        self.analytics_month_cb.bind("<<ComboboxSelected>>",lambda e:self._redraw_all())
         # Фильтр по профилю
         tk.Label(dh,text="Профиль:",bg="#13161f",fg="#4a5580",
                  font=("Segoe UI",8)).pack(side="right",padx=(0,4))
@@ -659,21 +669,28 @@ class App(tk.Tk):
         s=task.get("scale","A")
         return task.get("total_sum",0)*(FACTOR_A if s=="A" else FACTOR_B)
 
+    def _get_analytics_month_filter(self):
+        if hasattr(self,"analytics_month_var"):
+            v=self.analytics_month_var.get()
+            return None if v=="Все" else v
+        return None
+
     def _profile_total_metric(self,name):
         total=0.0; p=self._profiles.get(name,{})
+        mf=self._get_analytics_month_filter()
         tasks=[]
         if isinstance(p,list): tasks=p
         else:
-            for mt in p.values():
-                if isinstance(mt,list): tasks.extend(mt)
+            for mk,mt in p.items():
+                if isinstance(mt,list) and (mf is None or mk==mf): tasks.extend(mt)
         for t in tasks: total+=self._metric_val(t)
         return total
 
     def _monthly_data_metric(self,name):
-        p=self._profiles.get(name,{}); res={}
+        p=self._profiles.get(name,{}); res={}; mf=self._get_analytics_month_filter()
         if isinstance(p,dict):
             for m,tasks in p.items():
-                if isinstance(tasks,list):
+                if isinstance(tasks,list) and (mf is None or m==mf):
                     res[m]=sum(self._metric_val(t) for t in tasks)
         return res
 
@@ -681,14 +698,15 @@ class App(tk.Tk):
         """Собирает данные по дням из всех профилей или выбранного."""
         sel=self.day_profile_var.get() if hasattr(self,"day_profile_var") else "Все"
         names=list(self._profiles.keys()) if sel=="Все" else ([sel] if sel in self._profiles else [])
+        mf=self._get_analytics_month_filter()
         day_totals={}  # "дд.мм.гггг" -> {profile->val}
         for name in names:
             p=self._profiles.get(name,{})
             tasks=[]
             if isinstance(p,list): tasks=p
             else:
-                for mt in p.values():
-                    if isinstance(mt,list): tasks.extend(mt)
+                for mk,mt in p.items():
+                    if isinstance(mt,list) and (mf is None or mk==mf): tasks.extend(mt)
             for t in tasks:
                 added=t.get("added","")
                 if added:
@@ -858,7 +876,19 @@ class App(tk.Tk):
 
     def _ease(self,t): return 1-(1-t)**3
 
+    def _update_analytics_month_cb(self):
+        if not hasattr(self,"analytics_month_cb"): return
+        all_m=set()
+        for name in self._profiles:
+            p=self._profiles.get(name,{})
+            if isinstance(p,dict): all_m.update(p.keys())
+        opts=["Все"]+sorted(all_m,key=self._mkey)
+        self.analytics_month_cb["values"]=opts
+        if self.analytics_month_var.get() not in opts:
+            self.analytics_month_var.set("Все")
+
     def _draw_bars(self):
+        self._update_analytics_month_cb()
         c=self.bc; c.delete("all"); W=c.winfo_width(); H=c.winfo_height()
         if W<10 or H<10: return
         names=list(self._profiles.keys())
@@ -974,22 +1004,69 @@ class App(tk.Tk):
             self._profiles[name]={mn:p}; save_profiles(self._profiles)
         self._refresh_profiles(); self._refresh_months(); self._refresh_tasks()
 
+    def _get_month_order(self):
+        """Возвращает список месяцев в пользовательском или стандартном порядке."""
+        if not self._cur_profile: return []
+        p=self._profiles.get(self._cur_profile,{})
+        if not isinstance(p,dict): return []
+        all_m=list(p.keys())
+        custom=self._month_order.get(self._cur_profile,[])
+        # Оставляем только существующие + добавляем новые
+        ordered=[m for m in custom if m in all_m]
+        for m in sorted(all_m,key=self._mkey):
+            if m not in ordered: ordered.append(m)
+        return ordered
+
     def _refresh_months(self):
         for w in self.months_panel.winfo_children(): w.destroy()
         if not self._cur_profile: return
         p=self._profiles.get(self._cur_profile,{})
         if not isinstance(p,dict): return
-        for m in sorted(p.keys(),key=self._mkey):
+        months=self._get_month_order()
+        for mi,m in enumerate(months):
             tasks=p.get(m,[]); n=len(tasks) if isinstance(tasks,list) else 0
             active=(m==self._cur_month)
-            tk.Button(self.months_panel,text=f"{m}  ({n})",
+            btn=tk.Button(self.months_panel,text=f"{m}  ({n})",
                       command=lambda mn=m:self._sel_month(mn),
                       bg="#1e2644" if active else "#0f1117",
                       fg="#5b8ef0" if active else "#6b7599",
                       activebackground="#1e2644",bd=0,relief="flat",
                       padx=8,pady=6,cursor="hand2",anchor="w",
-                      font=("Segoe UI",9,"bold" if active else "normal")
-                      ).pack(fill="x",pady=1)
+                      font=("Segoe UI",9,"bold" if active else "normal"))
+            btn.pack(fill="x",pady=1)
+            # Drag-and-drop
+            btn._month_name=m; btn._month_idx=mi
+            btn.bind("<ButtonPress-1>",self._month_drag_start)
+            btn.bind("<B1-Motion>",self._month_drag_move)
+            btn.bind("<ButtonRelease-1>",self._month_drag_end)
+
+    def _month_drag_start(self,e):
+        w=e.widget; self._drag_month=w._month_name; self._drag_y0=e.y_root
+        self._drag_widget=w; w._orig_bg=w.cget("bg")
+
+    def _month_drag_move(self,e):
+        if not hasattr(self,"_drag_month"): return
+        dy=e.y_root-self._drag_y0
+        if abs(dy)>5: self._drag_widget.configure(relief="raised",bd=1)
+
+    def _month_drag_end(self,e):
+        if not hasattr(self,"_drag_month") or not self._drag_month: return
+        w=e.widget; src=self._drag_month
+        self._drag_widget.configure(relief="flat",bd=0)
+        # Определяем позицию вставки по y
+        children=self.months_panel.winfo_children()
+        target_idx=len(children)-1
+        for i,child in enumerate(children):
+            cy=child.winfo_y()+child.winfo_height()//2
+            if e.y_root-self.months_panel.winfo_rooty()<cy:
+                target_idx=i; break
+        months=self._get_month_order()
+        if src in months:
+            months.remove(src)
+            months.insert(min(target_idx,len(months)),src)
+            self._month_order[self._cur_profile]=months
+            self._refresh_months()
+        self._drag_month=None
 
     def _new_month(self):
         if not self._cur_profile: messagebox.showwarning("","Выбери профиль"); return
@@ -1069,11 +1146,24 @@ class App(tk.Tk):
         messagebox.showinfo("Готово",msg)
 
     def _del_task(self):
-        if self._sel_row is None: messagebox.showwarning("","Кликни на задачу"); return
-        tasks=self._cur_tasks(); idx=self._sel_row
-        if idx>=len(tasks): return
-        if not messagebox.askyesno("Удалить?",f"Удалить «{tasks[idx]['filename']}»?"): return
-        tasks.pop(idx); save_profiles(self._profiles)
+        tasks=self._cur_tasks()
+        # Мультиудаление по чекбоксам
+        if self._checked_rows:
+            checked=sorted(self._checked_rows,reverse=True)
+            names=[tasks[i].get("filename","?") for i in checked if i<len(tasks)]
+            if not messagebox.askyesno("Удалить?",f"Удалить {len(names)} задач?\n"+"\n".join(names[:5])
+                                       +("\n..." if len(names)>5 else "")): return
+            for i in checked:
+                if i<len(tasks): tasks.pop(i)
+            self._checked_rows.clear()
+        else:
+            # Одиночное удаление
+            if self._sel_row is None: messagebox.showwarning("","Выбери задачу или отметь чекбоксами"); return
+            idx=self._sel_row
+            if idx>=len(tasks): return
+            if not messagebox.askyesno("Удалить?",f"Удалить «{tasks[idx]['filename']}»?"): return
+            tasks.pop(idx)
+        save_profiles(self._profiles)
         self._sel_row=None; self._refresh_months(); self._refresh_tasks()
 
     def _refresh_tasks(self):
@@ -1082,20 +1172,25 @@ class App(tk.Tk):
             upd()
         for w in self.ti.winfo_children(): w.destroy()
         self._tc.delete("empty_overlay"); self._empty_text = ""
-        self._svars={}; tasks=self._cur_tasks()
+        self._svars={}; self._checked_rows.clear(); tasks=self._cur_tasks()
         if not self._cur_profile:
             self._empty("← Создай или выбери профиль"); self._upd_tot([]); return
         if not self._cur_month:
             self._empty("← Выбери месяц"); self._upd_tot([]); return
         if not tasks:
             self._empty("Нет задач — нажми «＋ Файл»"); self._upd_tot([]); return
-        # Фильтрация по поиску
+        # Фильтрация по поиску (+ по номерам и значениям)
         q = self._search_var.get().lower().strip() if hasattr(self,"_search_var") else ""
         if q:
-            tasks = [t for t in tasks if
-                     q in t.get("filename","").lower() or
-                     q in t.get("well","").lower() or
-                     q in t.get("api","").lower()]
+            filtered=[]
+            for ti_idx,t in enumerate(tasks):
+                if (q in t.get("filename","").lower() or
+                    q in t.get("well","").lower() or
+                    q in t.get("api","").lower() or
+                    q==str(ti_idx+1) or
+                    q in f"{t.get('total_sum',0):,.1f}".lower()):
+                    filtered.append(t)
+            tasks=filtered
 
         # Сортировка
         sort = self._sort_var.get() if hasattr(self,"_sort_var") else "дата"
@@ -1194,7 +1289,16 @@ class App(tk.Tk):
                        font=("Segoe UI",10,"bold" if bold else "normal"),anchor=anch,width=w)
             l.bind("<Button-1>",lambda e:sel()); return l
 
-        lbl(row,str(idx+1),fg="#4a5580",w=3).pack(side="left",padx=(8,4),pady=8)
+        # Чекбокс для мультивыделения
+        chk_var=tk.BooleanVar(value=idx in self._checked_rows)
+        def _on_chk(i=idx,v=chk_var):
+            if v.get(): self._checked_rows.add(i)
+            else: self._checked_rows.discard(i)
+        chk=tk.Checkbutton(row,variable=chk_var,command=_on_chk,
+                           bg=rbg,activebackground=rbg,selectcolor="#1c2035",
+                           bd=0,highlightthickness=0,cursor="hand2")
+        chk.pack(side="left",padx=(6,0))
+        lbl(row,str(idx+1),fg="#4a5580",w=3).pack(side="left",padx=(2,4),pady=8)
         inf=tk.Frame(row,bg=rbg); inf.bind("<Button-1>",sel); inf.pack(side="left",fill="x",expand=True,padx=4)
         tk.Label(inf,text=task.get("filename","?"),bg=rbg,fg="#e2e6f0",
                  font=("Segoe UI",10,"bold"),anchor="w").pack(anchor="w")
