@@ -448,6 +448,15 @@ class App(tk.Tk):
                     foreground="#c5cce0",borderwidth=0,rowheight=24)
         s.configure("Treeview.Heading",background="#1e2233",foreground="#8b93a8",relief="flat")
         s.map("Treeview",background=[("selected","#252d45")],foreground=[("selected","#5b8ef0")])
+        # Красивые комбобоксы
+        s.configure("Dark.TCombobox",fieldbackground="#1a1f35",background="#1a1f35",
+                    foreground="#c5cce0",arrowcolor="#5b8ef0",borderwidth=1,relief="flat",
+                    padding=(8,4))
+        s.map("Dark.TCombobox",fieldbackground=[("readonly","#1a1f35")],
+              foreground=[("readonly","#c5cce0")],
+              selectbackground=[("readonly","#1a1f35")],
+              selectforeground=[("readonly","#c5cce0")],
+              background=[("readonly","#252d55"),("active","#2a3366")])
 
     def _btn(self,p,text,cmd,fg="#8b93a8",bg="#1e2233",**kw):
         kw.setdefault("font",("Segoe UI",9))
@@ -625,31 +634,33 @@ class App(tk.Tk):
         dh=tk.Frame(day_frame,bg="#13161f"); dh.pack(fill="x",padx=12,pady=(10,6))
         self.day_title=tk.Label(dh,text="По дням",bg="#13161f",fg="#8b93a8",
                  font=("Segoe UI",9,"bold")); self.day_title.pack(side="left")
-        # Фильтр по месяцу (для всех графиков)
-        tk.Label(dh,text="Месяц:",bg="#13161f",fg="#4a5580",
-                 font=("Segoe UI",8)).pack(side="right",padx=(0,4))
-        self.analytics_month_var=tk.StringVar(value="Все")
-        self.analytics_month_cb=ttk.Combobox(dh,textvariable=self.analytics_month_var,
-                                              state="readonly",width=14,
-                                              font=("Segoe UI",9))
-        self.analytics_month_cb.pack(side="right",padx=(0,12))
-        self.analytics_month_cb.bind("<<ComboboxSelected>>",lambda e:self._redraw_all())
-        # Фильтр по профилю
-        tk.Label(dh,text="Профиль:",bg="#13161f",fg="#4a5580",
-                 font=("Segoe UI",8)).pack(side="right",padx=(0,4))
+        # Фильтр по месяцу (для всех графиков) — красивые кнопки
+        filter_frame=tk.Frame(dh,bg="#13161f"); filter_frame.pack(side="right")
+        # Профиль
+        tk.Label(filter_frame,text="Профиль:",bg="#13161f",fg="#5b6a90",
+                 font=("Segoe UI",8,"bold")).pack(side="left",padx=(0,4))
         self.day_profile_var=tk.StringVar(value="Все")
-        self.day_profile_cb=ttk.Combobox(dh,textvariable=self.day_profile_var,
-                                          state="readonly",width=12,
+        self.day_profile_cb=ttk.Combobox(filter_frame,textvariable=self.day_profile_var,
+                                          state="readonly",width=12,style="Dark.TCombobox",
                                           font=("Segoe UI",9))
-        self.day_profile_cb.pack(side="right",padx=(0,8))
+        self.day_profile_cb.pack(side="left",padx=(0,14))
         self.day_profile_cb.bind("<<ComboboxSelected>>",lambda e:self._draw_days())
+        # Месяц
+        tk.Label(filter_frame,text="Месяц:",bg="#13161f",fg="#5b6a90",
+                 font=("Segoe UI",8,"bold")).pack(side="left",padx=(0,4))
+        self.analytics_month_var=tk.StringVar(value="Все")
+        self.analytics_month_cb=ttk.Combobox(filter_frame,textvariable=self.analytics_month_var,
+                                              state="readonly",width=16,style="Dark.TCombobox",
+                                              font=("Segoe UI",9))
+        self.analytics_month_cb.pack(side="left",padx=(0,4))
+        self.analytics_month_cb.bind("<<ComboboxSelected>>",lambda e:self._redraw_all())
         self.dc=tk.Canvas(day_frame,bg="#13161f",highlightthickness=0,height=120)
         self.dc.pack(fill="x",padx=8,pady=(0,10))
         self.dc.bind("<Configure>",lambda e:self._draw_days())
 
     def _redraw_all(self):
         self._update_metric_titles()
-        self._draw_bars(); self._draw_line(); self._draw_days()
+        self._start_anim()
 
     def _update_metric_titles(self):
         m=self.metric_var.get()
@@ -1024,7 +1035,6 @@ class App(tk.Tk):
             tasks=p.get(m,[]); n=len(tasks) if isinstance(tasks,list) else 0
             active=(m==self._cur_month)
             btn=tk.Button(self.months_panel,text=f"{m}  ({n})",
-                      command=lambda mn=m:self._sel_month(mn),
                       bg="#1e2644" if active else "#0f1117",
                       fg="#5b8ef0" if active else "#6b7599",
                       activebackground="#1e2644",bd=0,relief="flat",
@@ -1040,17 +1050,31 @@ class App(tk.Tk):
     def _month_drag_start(self,e):
         w=e.widget; self._drag_month=w._month_name; self._drag_y0=e.y_root
         self._drag_widget=w; w._orig_bg=w.cget("bg")
+        self._drag_active=False
+        # Долгое удержание — 500мс для начала перетаскивания
+        self._drag_hold_id=self.after(500,lambda:self._month_drag_activate(w))
+
+    def _month_drag_activate(self,w):
+        self._drag_active=True
+        w.configure(relief="raised",bd=2,bg="#2a3566")
 
     def _month_drag_move(self,e):
-        if not hasattr(self,"_drag_month"): return
-        dy=e.y_root-self._drag_y0
-        if abs(dy)>5: self._drag_widget.configure(relief="raised",bd=1)
+        if not hasattr(self,"_drag_month") or not self._drag_active: return
+        # Визуально показать что перетаскиваем
+        self._drag_widget.configure(relief="raised",bd=2)
 
     def _month_drag_end(self,e):
+        # Отменяем таймер долгого удержания
+        if hasattr(self,"_drag_hold_id") and self._drag_hold_id:
+            self.after_cancel(self._drag_hold_id); self._drag_hold_id=None
         if not hasattr(self,"_drag_month") or not self._drag_month: return
-        w=e.widget; src=self._drag_month
+        src=self._drag_month
         self._drag_widget.configure(relief="flat",bd=0)
-        # Определяем позицию вставки по y
+        if not self._drag_active:
+            # Короткий клик — выбор месяца
+            self._drag_month=None; self._drag_active=False
+            self._sel_month(src); return
+        # Перетаскивание — определяем позицию вставки
         children=self.months_panel.winfo_children()
         target_idx=len(children)-1
         for i,child in enumerate(children):
@@ -1063,7 +1087,7 @@ class App(tk.Tk):
             months.insert(min(target_idx,len(months)),src)
             self._month_order[self._cur_profile]=months
             self._refresh_months()
-        self._drag_month=None
+        self._drag_month=None; self._drag_active=False
 
     def _new_month(self):
         if not self._cur_profile: messagebox.showwarning("","Выбери профиль"); return
