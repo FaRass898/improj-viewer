@@ -12,7 +12,7 @@ except ImportError:
 from tkinter import ttk, filedialog, messagebox, simpledialog
 import threading, urllib.request, urllib.error
 
-VERSION = "1.9.0"
+VERSION = "1.10.0"
 
 def get_app_dir():
     """Папка где лежит .exe или .py — работает в обоих случаях."""
@@ -634,29 +634,64 @@ class App(tk.Tk):
         dh=tk.Frame(day_frame,bg="#13161f"); dh.pack(fill="x",padx=12,pady=(10,6))
         self.day_title=tk.Label(dh,text="По дням",bg="#13161f",fg="#8b93a8",
                  font=("Segoe UI",9,"bold")); self.day_title.pack(side="left")
-        # Фильтр по месяцу (для всех графиков) — красивые кнопки
-        filter_frame=tk.Frame(dh,bg="#13161f"); filter_frame.pack(side="right")
-        # Профиль
-        tk.Label(filter_frame,text="Профиль:",bg="#13161f",fg="#5b6a90",
+        # Фильтр — красивая панель с чипами
+        filter_wrap=tk.Frame(dh,bg="#13161f"); filter_wrap.pack(side="right")
+        # Профиль — комбобокс
+        tk.Label(filter_wrap,text="Профиль:",bg="#13161f",fg="#5b6a90",
                  font=("Segoe UI",8,"bold")).pack(side="left",padx=(0,4))
         self.day_profile_var=tk.StringVar(value="Все")
-        self.day_profile_cb=ttk.Combobox(filter_frame,textvariable=self.day_profile_var,
+        self.day_profile_cb=ttk.Combobox(filter_wrap,textvariable=self.day_profile_var,
                                           state="readonly",width=12,style="Dark.TCombobox",
                                           font=("Segoe UI",9))
         self.day_profile_cb.pack(side="left",padx=(0,14))
         self.day_profile_cb.bind("<<ComboboxSelected>>",lambda e:self._draw_days())
-        # Месяц
-        tk.Label(filter_frame,text="Месяц:",bg="#13161f",fg="#5b6a90",
-                 font=("Segoe UI",8,"bold")).pack(side="left",padx=(0,4))
+        # Месяц — красивые чипы
+        tk.Label(filter_wrap,text="Месяц:",bg="#13161f",fg="#5b6a90",
+                 font=("Segoe UI",8,"bold")).pack(side="left",padx=(0,6))
         self.analytics_month_var=tk.StringVar(value="Все")
-        self.analytics_month_cb=ttk.Combobox(filter_frame,textvariable=self.analytics_month_var,
-                                              state="readonly",width=16,style="Dark.TCombobox",
-                                              font=("Segoe UI",9))
-        self.analytics_month_cb.pack(side="left",padx=(0,4))
-        self.analytics_month_cb.bind("<<ComboboxSelected>>",lambda e:self._redraw_all())
+        self._month_chips_frame=tk.Frame(filter_wrap,bg="#13161f")
+        self._month_chips_frame.pack(side="left")
+        self._build_month_chips()
         self.dc=tk.Canvas(day_frame,bg="#13161f",highlightthickness=0,height=120)
         self.dc.pack(fill="x",padx=8,pady=(0,10))
         self.dc.bind("<Configure>",lambda e:self._draw_days())
+
+    def _build_month_chips(self):
+        """Создаёт красивые кнопки-чипы для выбора месяца в аналитике"""
+        if not hasattr(self,"_month_chips_frame"): return
+        for w in self._month_chips_frame.winfo_children(): w.destroy()
+        all_m=set()
+        for name in self._profiles:
+            p=self._profiles.get(name,{})
+            if isinstance(p,dict): all_m.update(p.keys())
+        opts=["Все"]+sorted(all_m,key=self._mkey)
+        cur=self.analytics_month_var.get()
+        if cur not in opts: cur="Все"; self.analytics_month_var.set("Все")
+        for o in opts:
+            active=(o==cur)
+            chip=tk.Label(self._month_chips_frame,text=o,
+                         bg="#5b8ef0" if active else "#1a1f35",
+                         fg="#ffffff" if active else "#6b7599",
+                         font=("Segoe UI",8,"bold" if active else "normal"),
+                         padx=10,pady=3,cursor="hand2",
+                         relief="flat",bd=0)
+            chip.pack(side="left",padx=2)
+            chip._val=o
+            # Скруглённый вид через highlight
+            if active:
+                chip.configure(highlightthickness=1,highlightbackground="#5b8ef0",highlightcolor="#5b8ef0")
+            else:
+                chip.configure(highlightthickness=1,highlightbackground="#252d55",highlightcolor="#252d55")
+            chip.bind("<Button-1>",lambda e,v=o:self._select_month_chip(v))
+            chip.bind("<Enter>",lambda e,c=chip,a=active:c.configure(
+                bg="#4a7de0" if a else "#252d55"))
+            chip.bind("<Leave>",lambda e,c=chip,a=active:c.configure(
+                bg="#5b8ef0" if a else "#1a1f35"))
+
+    def _select_month_chip(self,val):
+        self.analytics_month_var.set(val)
+        self._build_month_chips()
+        self._redraw_all()
 
     def _redraw_all(self):
         self._update_metric_titles()
@@ -885,15 +920,7 @@ class App(tk.Tk):
     def _ease(self,t): return 1-(1-t)**3
 
     def _update_analytics_month_cb(self):
-        if not hasattr(self,"analytics_month_cb"): return
-        all_m=set()
-        for name in self._profiles:
-            p=self._profiles.get(name,{})
-            if isinstance(p,dict): all_m.update(p.keys())
-        opts=["Все"]+sorted(all_m,key=self._mkey)
-        self.analytics_month_cb["values"]=opts
-        if self.analytics_month_var.get() not in opts:
-            self.analytics_month_var.set("Все")
+        self._build_month_chips()
 
     def _draw_bars(self):
         self._update_analytics_month_cb()
@@ -1034,14 +1061,17 @@ class App(tk.Tk):
         for mi,m in enumerate(months):
             tasks=p.get(m,[]); n=len(tasks) if isinstance(tasks,list) else 0
             active=(m==self._cur_month)
-            btn=tk.Button(self.months_panel,text=f"{m}  ({n})",
+            btn=tk.Label(self.months_panel,text=f"{m}  ({n})",
                       bg="#1e2644" if active else "#0f1117",
                       fg="#5b8ef0" if active else "#6b7599",
-                      activebackground="#1e2644",bd=0,relief="flat",
+                      bd=0,relief="flat",
                       padx=8,pady=6,cursor="hand2",anchor="w",
                       font=("Segoe UI",9,"bold" if active else "normal"))
+            if active:
+                # Индикатор активного месяца — полоска слева
+                btn.configure(bg="#1a2850",highlightthickness=2,highlightbackground="#5b8ef0",highlightcolor="#5b8ef0")
             btn.pack(fill="x",pady=1)
-            # Drag-and-drop
+            # Drag-and-drop (долгое удержание) + клик
             btn._month_name=m; btn._month_idx=mi
             btn.bind("<ButtonPress-1>",self._month_drag_start)
             btn.bind("<B1-Motion>",self._month_drag_move)
