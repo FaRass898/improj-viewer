@@ -12,7 +12,7 @@ except ImportError:
 from tkinter import ttk, filedialog, messagebox, simpledialog
 import threading, urllib.request, urllib.error
 
-VERSION = "1.7.0"
+VERSION = "1.8.0"
 
 def get_app_dir():
     """Папка где лежит .exe или .py — работает в обоих случаях."""
@@ -130,6 +130,8 @@ class App(tk.Tk):
         self.geometry("1100x700")
         self.configure(bg="#0f1117")
         self.resizable(True,True)
+        try: os.remove(sys.executable+".old")
+        except: pass
         self._profiles=load_profiles()
         self._cur_profile=None; self._cur_month=None
         self._sel_row=None; self._svars={}; self._checked_rows=set()
@@ -234,17 +236,14 @@ class App(tk.Tk):
                                     f"Скачиваем... {downloaded//1024//1024} МБ",
                                     "improj_viewer.exe", pct)
                 _set_status("Устанавливаем...", "", 96)
-                bat = os.path.join(current_dir, "_update.bat")
-                with open(bat, "w") as f:
-                    f.write(
-                        f"@echo off\n"
-                        f"ping 127.0.0.1 -n 3 >nul\n"
-                        f"move /Y \"{new_exe}\" \"{current_exe}\"\n"
-                        f"start \"\" \"{current_exe}\"\n"
-                        f"del \"%~f0\"\n"
-                    )
-                _set_status("Готово!", "", 100)
-                self.after(200, lambda: _done(True))
+                # Переименовываем текущий exe (Windows позволяет) и ставим новый
+                old_exe = current_exe + ".old"
+                try: os.remove(old_exe)
+                except: pass
+                os.rename(current_exe, old_exe)
+                os.rename(new_exe, current_exe)
+                _set_status("Готово! Перезапуск...", "", 100)
+                self.after(300, lambda: _done(True))
             except Exception as e:
                 self.after(0, lambda err=str(e): _done(False, err))
 
@@ -252,9 +251,7 @@ class App(tk.Tk):
             prog.stop(); win.destroy()
             if ok:
                 import subprocess
-                bat = os.path.join(current_dir, "_update.bat")
-                subprocess.Popen(bat, shell=True,
-                                 creationflags=subprocess.CREATE_NO_WINDOW)
+                subprocess.Popen([current_exe], creationflags=0x00000008)
                 self.destroy()
             else:
                 messagebox.showerror("Ошибка", f"Не удалось скачать:\n{error}")
