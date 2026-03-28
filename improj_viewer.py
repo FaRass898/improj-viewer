@@ -12,7 +12,7 @@ except ImportError:
 from tkinter import ttk, filedialog, messagebox, simpledialog
 import threading, urllib.request, urllib.error
 
-VERSION = "1.8.0"
+VERSION = "1.9.0"
 
 def get_app_dir():
     """Папка где лежит .exe или .py — работает в обоих случаях."""
